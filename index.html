@@ -1,965 +1,589 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ms">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Borang Tempahan Makmal Komputer</title>
-    <!-- Muat naik Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Muat naik Firebase SDK -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, query, where, onSnapshot, setLogLevel, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // --- KONFIGURASI FIREBASE (WAJIB) ---
-        // Pembolehubah ini akan dimasukkan secara automatik oleh persekitaran
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let db, auth, userId;
-        let currentBookings = new Map(); // Simpan tempahan semasa untuk semakan pantas
-        let bookingWeek = { start: null, end: null, dates: [] }; // Simpan tarikh minggu tempahan
-        let bookingIdToDelete = null; // Simpan ID untuk pengesahan padam
-
-        // --- PEMILIH ELEMEN DOM ---
-        const bookingForm = document.getElementById('booking-form');
-        const dateInput = document.getElementById('booking-date');
-        const messageBox = document.getElementById('message-box');
-        const gridHead = document.getElementById('grid-head');
-        const gridBody = document.getElementById('grid-body');
-        const loadingSpinner = document.getElementById('loading-spinner');
-        const mainContent = document.getElementById('main-content');
-        const deleteModal = document.getElementById('delete-modal');
-        const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
-        const cancelDeleteBtn = document.getElementById('cancel-delete-btn');
-        const downloadCsvBtn = document.getElementById('download-csv-btn');
-        const bookingListContainer = document.getElementById('booking-list');
-        
-        // (BARU) Pemilih untuk Modal Kata Laluan
-        const passwordModal = document.getElementById('password-modal');
-        const confirmPasswordBtn = document.getElementById('confirm-password-btn');
-        const cancelPasswordBtn = document.getElementById('cancel-password-btn');
-        const passwordInput = document.getElementById('password-input');
-        const passwordErrorMsg = document.getElementById('password-error-msg');
-
-        const timeSlots = [
-            '07:30AM', '08:00AM', '08:30AM', '09:00AM', '09:30AM', '10:00AM',
-            '10:20AM', '10:50AM', '11:20AM', '11:50AM', '12:20PM', '12:50PM',
-            '02:00PM', '02:30PM', '03:00PM', '03:30PM', '04:00PM'
-        ];
-
-        // --- FUNGSI BANTUAN ---
-
-        /**
-         * Format tarikh ke YYYY-MM-DD (menggunakan tarikh tempatan)
-         * @param {Date} date - Objek tarikh
-         */
-        function toISODateString(date) {
-            // Elakkan .toISOString() kerana ia menukar kepada UTC dan boleh beralih hari
-            const year = date.getFullYear();
-            const month = (date.getMonth() + 1).toString().padStart(2, '0'); // +1 kerana bulan 0-11
-            const day = date.getDate().toString().padStart(2, '0');
-            return `${year}-${month}-${day}`;
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem Tempahan Makmal Komputer</title>
+  <script src="/_sdk/element_sdk.js"></script>
+  <script src="/_sdk/data_sdk.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+        body {
+            box-sizing: border-box;
         }
+        .booking-card {
+            transition: all 0.3s ease;
+        }
+        .booking-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .time-slot {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .form-section {
+            background: linear-gradient(135deg, #a7f3d0 0%, #6ee7b7 100%);
+        }
+        .schedule-section {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+    </style>
+  <style>@view-transition { navigation: auto; }</style>
+ </head>
+ <body class="min-h-full bg-gradient-to-br from-blue-50 to-indigo-100">
+  <div class="container mx-auto px-4 py-6"><!-- Header dengan Logo -->
+   <div class="text-center mb-8"><img src="https://i.postimg.cc/pXm8mmQ3/unnamed.png" alt="Logo Sekolah" class="mx-auto mb-4 h-20 w-20 object-contain" onerror="this.style.display='none';">
+    <h1 id="tajuk-sistem" class="text-4xl font-bold text-gray-800 mb-2">Sistem Tempahan Makmal Komputer</h1>
+    <p id="nama-sekolah" class="text-xl text-gray-600">Sekolah Kebangsaan</p>
+   </div>
+   <div class="grid lg:grid-cols-2 gap-8"><!-- Borang Tempahan -->
+    <div class="form-section rounded-2xl shadow-2xl p-8 text-white">
+     <h2 class="text-2xl font-bold mb-6 text-center text-black">Borang Tempahan Baru</h2>
+     <form id="booking-form" class="space-y-6"><!-- Nama Guru -->
+      <div><label for="nama-guru" class="block text-sm font-semibold mb-2 text-black">Nama Guru</label> <select id="nama-guru" required class="w-full p-3 rounded-lg border-2 border-gray-300 bg-white text-black focus:border-blue-500 focus:outline-none"> <option value="">Sila Pilih</option> <option value="EN MASRI BIN MAT SOM">EN MASRI BIN MAT SOM</option> <option value="EN MOHD SHUKRI BIN ABDULLAH">EN MOHD SHUKRI BIN ABDULLAH</option> <option value="PN MIMI HAFIZAH BINTI ADNAN">PN MIMI HAFIZAH BINTI ADNAN</option> <option value="EN MOHD ZAMRI BIN JAMALUDIN">EN MOHD ZAMRI BIN JAMALUDIN</option> <option value="PN WAN MURNI WATI BINTI MAT RANI">PN WAN MURNI WATI BINTI MAT RANI</option> <option value="EN MOHD SUHAIMI BIN OTHMAN">EN MOHD SUHAIMI BIN OTHMAN</option> <option value="PN NOR'AZIAH BT MOHD STAR">PN NOR'AZIAH BT MOHD STAR</option> <option value="PN RABEAH BT JAHAYA">PN RABEAH BT JAHAYA</option> <option value="PN.NOR FADILAH BT SAAT">PN.NOR FADILAH BT SAAT</option> <option value="PN NOR AZA BT YAHYA">PN NOR AZA BT YAHYA</option> <option value="PN AZIZAH BT MOKHTAR">PN AZIZAH BT MOKHTAR</option> <option value="EN MUHAMMAD HILMAN BIN ABD HALIM">EN MUHAMMAD HILMAN BIN ABD HALIM</option> <option value="PN NURUL ADIBAH BT MOHD SIBI">PN NURUL ADIBAH BT MOHD SIBI</option> <option value="PN SHUZANNA BINTI SHOIB">PN SHUZANNA BINTI SHOIB</option> <option value="EN ABD NASIR BIN SHAARANI">EN ABD NASIR BIN SHAARANI</option> <option value="PN NOR AFIFAH BT MAT SALIM">PN NOR AFIFAH BT MAT SALIM</option> <option value="PN NIK NORLINI BINTI NIK DIN">PN NIK NORLINI BINTI NIK DIN</option> <option value="PN JAMILAH BT MOKHTAR">PN JAMILAH BT MOKHTAR</option> <option value="PN SUHAILY BT MAT NOR">PN SUHAILY BT MAT NOR</option> <option value="PN NURUL IZZATI BT HASMI">PN NURUL IZZATI BT HASMI</option> </select>
+      </div><!-- Nama Kelas -->
+      <div><label for="nama-kelas" class="block text-sm font-semibold mb-2 text-black">Nama Kelas</label> <select id="nama-kelas" required class="w-full p-3 rounded-lg border-2 border-gray-300 bg-white text-black focus:border-blue-500 focus:outline-none"> <option value="">Sila Pilih</option> <option value="PRASEKOLAH PINTAR">PRASEKOLAH PINTAR</option> <option value="TAHUN 1 CERDAS">TAHUN 1 CERDAS</option> <option value="TAHUN 2 CERDIK">TAHUN 2 CERDIK</option> <option value="TAHUN 3 BIJAK">TAHUN 3 BIJAK</option> <option value="TAHUN 4 PINTAR">TAHUN 4 PINTAR</option> <option value="TAHUN 5 MUMTAZ">TAHUN 5 MUMTAZ</option> <option value="TAHUN 6 GENIUS">TAHUN 6 GENIUS</option> <option value="LAIN-LAIN">LAIN-LAIN</option> </select>
+      </div><!-- Subjek -->
+      <div><label for="subjek" class="block text-sm font-semibold mb-2 text-black">Subjek</label> <select id="subjek" required class="w-full p-3 rounded-lg border-2 border-gray-300 bg-white text-black focus:border-blue-500 focus:outline-none"> <option value="">Sila Pilih</option> <option value="BM">BM</option> <option value="BI">BI</option> <option value="MATE">MATE</option> <option value="SAINS">SAINS</option> <option value="BA">BA</option> <option value="PJ">PJ</option> <option value="PK">PK</option> <option value="PS">PS</option> <option value="MZ">MZ</option> <option value="PI">PI</option> <option value="ULM">ULM</option> <option value="TSMK">TSMK</option> <option value="SJ">SJ</option> <option value="RBT">RBT</option> <option value="LAIN-LAIN">LAIN-LAIN</option> </select>
+      </div><!-- Tarikh -->
+      <div><label class="block text-sm font-semibold mb-2 text-black">Tarikh</label>
+       <div id="calendar-container" class="bg-white rounded-lg p-4 border-2 border-gray-300">
+        <div id="calendar-header" class="text-center mb-3 font-semibold text-gray-800"></div>
+        <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-600 mb-2">
+         <div>
+          Isn
+         </div>
+         <div>
+          Sel
+         </div>
+         <div>
+          Rab
+         </div>
+         <div>
+          Kha
+         </div>
+         <div>
+          Jum
+         </div>
+         <div>
+          Sab
+         </div>
+         <div>
+          Ahd
+         </div>
+        </div>
+        <div id="calendar-dates" class="grid grid-cols-7 gap-1"><!-- Calendar dates will be populated here -->
+        </div>
+       </div><input type="hidden" id="selected-date" name="tarikh" required>
+       <div id="selected-date-display" class="mt-2 text-sm text-black font-medium"></div>
+      </div><!-- Slot Masa -->
+      <div><label for="slot-masa" class="block text-sm font-semibold mb-2 text-black">Slot Masa</label> <select id="slot-masa" required class="w-full p-3 rounded-lg border-2 border-gray-300 bg-white text-black focus:border-blue-500 focus:outline-none"> <option value="">Sila Pilih</option> <option value="07:30AM">07:30AM</option> <option value="08:00AM">08:00AM</option> <option value="08:30AM">08:30AM</option> <option value="09:00AM">09:00AM</option> <option value="09:30AM">09:30AM</option> <option value="10:00AM">10:00AM</option> <option value="10:20AM">10:20AM</option> <option value="10:50AM">10:50AM</option> <option value="11:20AM">11:20AM</option> <option value="11:50AM">11:50AM</option> <option value="12:20PM">12:20PM</option> <option value="12:50PM">12:50PM</option> <option value="02:00PM">02:00PM</option> <option value="02:30PM">02:30PM</option> <option value="03:00PM">03:00PM</option> <option value="03:30PM">03:30PM</option> <option value="04:00PM">04:00PM</option> </select>
+      </div><!-- Alatan -->
+      <div><label class="block text-sm font-semibold mb-3 text-black">Alatan Yang Digunakan</label>
+       <div class="grid grid-cols-2 gap-3"><label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Komputer" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Komputer</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Laptop" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Laptop</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Headphones" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Headphones</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Mouse murid" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Mouse murid</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="LCD dan laptop guru" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">LCD dan laptop guru</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Smartboard (akan datang)" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Smartboard (akan datang)</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Microphones" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Microphones</span> </label> <label class="flex items-center space-x-2 cursor-pointer"> <input type="checkbox" value="Speaker" class="rounded border-white/20 bg-white/10 text-pink-500 focus:ring-pink-500"> <span class="text-sm text-black">Speaker</span> </label>
+       </div>
+      </div><button type="submit" id="submit-btn" class="w-full bg-white text-pink-600 font-bold py-3 px-6 rounded-lg hover:bg-gray-100 transition duration-300 transform hover:scale-105"> Hantar Tempahan </button>
+     </form>
+     <div id="message" class="mt-4 p-3 rounded-lg hidden"></div>
+    </div><!-- Jadual Tempahan -->
+    <div class="schedule-section rounded-2xl shadow-2xl p-8 text-white">
+     <h2 class="text-2xl font-bold mb-6 text-center">Jadual Waktu Makmal Komputer</h2><!-- Week Navigation -->
+     <div class="flex justify-between items-center mb-4"><button id="prev-week-btn" onclick="changeWeek(-1)" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2"> <span>&lt;</span> <span>Minggu Sebelum</span> </button>
+      <div id="current-week" class="text-center font-semibold text-lg"></div><button id="next-week-btn" onclick="changeWeek(1)" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2"> <span>Minggu Berikutnya</span> <span>&gt;</span> </button>
+     </div>
+     <div id="booking-schedule" class="overflow-x-auto"><!-- Jadual waktu akan dipaparkan di sini -->
+     </div>
+    </div>
+   </div>
+  </div>
+  <script>
+        let bookings = [];
+        let currentRecordCount = 0;
+        let currentViewWeekOffset = 0; // 0 = current week, -1 = previous week, 1 = next week
 
-        /**
-         * Dapatkan julat minggu tempahan yang dibenarkan (Req 8, 9, 10)
-         * Req 9: Mula tempah Sabtu minggu sebelumnya
-         * Req 8 & 10: Hanya tempah untuk Isnin-Jumaat minggu semasa
-         */
-        function getWeekRangeToBook() {
-            const today = new Date();
-            const dayOfWeek = today.getDay(); // 0=Ahad, 1=Isnin, ..., 6=Sabtu
+        const defaultConfig = {
+            tajuk_sistem: "Sistem Tempahan Makmal Komputer",
+            nama_sekolah: ""
+        };
 
-            let startOffset;
-            // Jika hari ini Sabtu (6), benarkan tempahan untuk minggu *depan* (Isnin = +2 hari)
-            if (dayOfWeek === 6) {
-                startOffset = 2;
-            // Jika hari ini Ahad (0), benarkan tempahan untuk minggu *depan* (Isnin = +1 hari)
-            } else if (dayOfWeek === 0) {
-                startOffset = 1;
-            // Jika hari ini Isnin-Jumaat (1-5), benarkan tempahan untuk minggu *semasa*
-            } else {
-                startOffset = 1 - dayOfWeek; // (Cth: Selasa(2) -> 1-2 = -1, Isnin lepas)
+        // Data handler untuk SDK
+        const dataHandler = {
+            onDataChanged(data) {
+                bookings = data;
+                currentRecordCount = data.length;
+                updateScheduleDisplay();
+                checkSlotAvailability();
             }
+        };
 
-            const monday = new Date();
-            monday.setDate(monday.getDate() + startOffset);
-            monday.setHours(0, 0, 0, 0); // Set ke permulaan hari Isnin
-
-            const friday = new Date(monday);
-            friday.setDate(monday.getDate() + 4);
-            friday.setHours(23, 59, 59, 999); // Set ke penghujung hari Jumaat
-
-            // Hasilkan senarai tarikh untuk minggu itu
-            const dates = [];
+        // Fungsi untuk mendapatkan tarikh minggu berdasarkan offset
+        function getWeekDates(weekOffset = 0) {
+            // Set today as October 30, 2025 (Khamis)
+            const today = new Date(2025, 9, 30); // October 30, 2025
+            const currentDay = today.getDay(); // 0=Ahad, 1=Isnin, ..., 6=Sabtu
+            
+            // Cari Isnin minggu ini
+            const monday = new Date(today);
+            const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay;
+            monday.setDate(today.getDate() + daysToMonday);
+            
+            // Adjust for week offset
+            monday.setDate(monday.getDate() + (weekOffset * 7));
+            
+            const weekDates = [];
+            const dayNames = ['Isnin', 'Selasa', 'Rabu', 'Khamis', 'Jumaat'];
+            
             for (let i = 0; i < 5; i++) {
-                const d = new Date(monday);
-                d.setDate(d.getDate() + i);
-                dates.push(d);
+                const date = new Date(monday);
+                date.setDate(monday.getDate() + i);
+                
+                // Boleh tempah jika tarikh adalah hari ini atau masa hadapan dalam minggu semasa sahaja
+                const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                const canBook = date >= todayDate;
+                
+                weekDates.push({
+                    date: date,
+                    dayName: dayNames[i],
+                    dateString: date.toISOString().split('T')[0],
+                    displayDate: `${dayNames[i]}, ${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`,
+                    canBook: canBook
+                });
             }
-            return { start: monday, end: friday, dates: dates };
+            
+            return weekDates;
         }
 
-        /**
-         * Format tarikh untuk tajuk grid (Cth: Isnin (27/10))
-         * @param {Date} date - Objek tarikh
-         */
-        function formatDateHeader(date) {
+        // Fungsi untuk mendapatkan tarikh minggu semasa (untuk kalendar)
+        function getCurrentWeekDates() {
+            return getWeekDates(0);
+        }
+
+        // Helper function to get the start of the week (Monday)
+        function getWeekStart(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+            return new Date(d.setDate(diff));
+        }
+
+        // Function to check if a date is bookable
+        function isDateBookable(date) {
+            // Set today as October 30, 2025 (Khamis)
+            const today = new Date(2025, 9, 30); // October 30, 2025
+            const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const dayOfWeek = date.getDay();
+            
+            // Cannot book on Saturday (6) and Sunday (0)
+            if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+            
+            // Cannot book dates before today
+            if (date < todayDate) return false;
+            
+            // Get the start of current week (Monday)
+            const currentWeekStart = getWeekStart(today);
+            
+            // Get the start of next week (Monday of next week)
+            const nextWeekStart = new Date(currentWeekStart);
+            nextWeekStart.setDate(currentWeekStart.getDate() + 7);
+            
+            // Get the end of next week (Friday of next week)
+            const nextWeekEnd = new Date(nextWeekStart);
+            nextWeekEnd.setDate(nextWeekStart.getDate() + 4); // Friday
+            
+            // Can only book within current week and next week (Monday to Friday only)
+            return date >= currentWeekStart && date <= nextWeekEnd;
+        }
+
+        // Calendar functionality
+        let currentCalendarDate = new Date(2025, 9, 30); // Set to October 30, 2025 (month is 0-indexed)
+        let selectedDate = null;
+
+        function renderCalendar() {
+            const calendarHeader = document.getElementById('calendar-header');
+            const calendarDates = document.getElementById('calendar-dates');
+            
+            const monthNames = [
+                'Januari', 'Februari', 'Mac', 'April', 'Mei', 'Jun',
+                'Julai', 'Ogos', 'September', 'Oktober', 'November', 'Disember'
+            ];
+            
+            const year = currentCalendarDate.getFullYear();
+            const month = currentCalendarDate.getMonth();
+            
+            calendarHeader.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <button type="button" onclick="changeMonth(-1)" class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">&lt;</button>
+                    <span>${monthNames[month]} ${year}</span>
+                    <button type="button" onclick="changeMonth(1)" class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">&gt;</button>
+                </div>
+            `;
+            
+            // Get first day of month and number of days
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const daysInMonth = lastDay.getDate();
+            
+            // Fix day calculation - getDay() returns 0=Sunday, 1=Monday, etc.
+            // We want Monday=0, Tuesday=1, etc. for our grid
+            let startingDayOfWeek = firstDay.getDay() - 1;
+            if (startingDayOfWeek < 0) startingDayOfWeek = 6; // Sunday becomes 6
+            
+            // Get today's date for comparison - October 30, 2025
+            const today = new Date(2025, 9, 30); // October 30, 2025
+            const todayString = today.toISOString().split('T')[0];
+            
+            calendarDates.innerHTML = '';
+            
+            // Add empty cells for days before the first day of the month
+            for (let i = 0; i < startingDayOfWeek; i++) {
+                const emptyCell = document.createElement('div');
+                emptyCell.className = 'h-8';
+                calendarDates.appendChild(emptyCell);
+            }
+            
+            // Add days of the month
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month, day);
+                const dateString = date.toISOString().split('T')[0];
+                
+                // Use the new booking logic
+                const canBook = isDateBookable(date);
+                
+                const dayCell = document.createElement('div');
+                dayCell.className = `h-8 w-8 flex items-center justify-center text-sm rounded transition-all duration-200 ${
+                    canBook 
+                        ? 'cursor-pointer hover:bg-blue-100 text-gray-800 hover:scale-110' 
+                        : 'text-gray-400 cursor-not-allowed'
+                } ${
+                    selectedDate === dateString 
+                        ? 'bg-blue-500 text-white font-bold shadow-lg' 
+                        : 'bg-white'
+                } ${
+                    dateString === todayString 
+                        ? 'ring-2 ring-blue-300' 
+                        : ''
+                }`;
+                
+                dayCell.textContent = day;
+                
+                if (canBook) {
+                    dayCell.addEventListener('click', () => selectDate(dateString, date));
+                }
+                
+                calendarDates.appendChild(dayCell);
+            }
+            
+            // Calendar display is separate from schedule display
+        }
+
+        function changeMonth(direction) {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() + direction);
+            renderCalendar();
+        }
+
+        function selectDate(dateString, date) {
+            selectedDate = dateString;
+            document.getElementById('selected-date').value = dateString;
+            
+            // Create a new date object from the dateString to ensure correct date
+            const selectedDateObj = new Date(dateString + 'T00:00:00');
             const dayNames = ['Ahad', 'Isnin', 'Selasa', 'Rabu', 'Khamis', 'Jumaat', 'Sabtu'];
-            const day = dayNames[date.getDay()];
-            const dateNum = date.getDate();
-            const monthNum = date.getMonth() + 1; // Bulan bermula dari 0
-            return `${day} (${dateNum}/${monthNum})`;
+            const dayName = dayNames[selectedDateObj.getDay()];
+            const displayText = `Tarikh dipilih: ${dayName}, ${selectedDateObj.getDate()}/${selectedDateObj.getMonth() + 1}/${selectedDateObj.getFullYear()}`;
+            document.getElementById('selected-date-display').textContent = displayText;
+            
+            renderCalendar();
+            checkSlotAvailability();
         }
 
-        /**
-         * Paparkan mesej maklum balas kepada pengguna
-         * @param {string} message - Mesej untuk dipaparkan
-         * @param {boolean} isError - Betul jika mesej ralat, salah jika mesej kejayaan
-         */
-        function showMessage(message, isError) {
-            messageBox.textContent = message;
+        // Check slot availability
+        function checkSlotAvailability() {
+            const selectedDateValue = document.getElementById('selected-date').value;
+            const slotSelect = document.getElementById('slot-masa');
             
-            if (isError) {
-                messageBox.classList.remove('bg-green-100', 'text-green-700');
-                messageBox.classList.add('bg-red-100', 'text-red-700');
-            } else {
-                messageBox.classList.remove('bg-red-100', 'text-red-700');
-                messageBox.classList.add('bg-green-100', 'text-green-700');
-            }
-
-            // Paparkan mesej
-            messageBox.classList.remove('hidden');
-
-            // Sembunyikan mesej selepas 5 saat
-            setTimeout(() => {
-                messageBox.classList.add('hidden');
-            }, 5000); // 5000ms = 5 saat
-        }
-
-        // --- LOGIK UTAMA APLIKASI ---
-
-        /**
-         * Sediakan input tarikh dengan had min/max (Req 8, 10)
-         */
-        function setupDateInput() {
-            const minDate = toISODateString(bookingWeek.start);
-            const maxDate = toISODateString(bookingWeek.end);
-            
-            dateInput.min = minDate;
-            dateInput.max = maxDate;
-            
-            // Tetapkan nilai lalai kepada Isnin minggu tempahan,
-            // tetapi jika hari ini dalam julat itu, gunakan hari ini
-            const today = new Date();
-            const todayISO = toISODateString(today);
-            if (todayISO >= minDate && todayISO <= maxDate) {
-                dateInput.value = todayISO;
-            } else {
-                dateInput.value = minDate;
+            if (selectedDateValue && slotSelect.value) {
+                const isBooked = bookings.some(booking => 
+                    booking.tarikh === selectedDateValue && 
+                    booking.slot_masa === slotSelect.value
+                );
+                
+                if (isBooked) {
+                    showMessage('Slot masa ini telah ditempah untuk tarikh yang dipilih. Sila pilih slot lain.', 'error');
+                    slotSelect.value = '';
+                }
             }
         }
 
-        /**
-         * Lukis semula grid tempahan berdasarkan data semasa (Req 6)
-         */
-        function updateBookingGrid() {
-            // 1. Kemas kini Tajuk Grid
-            gridHead.innerHTML = ''; // Kosongkan tajuk lama
-            const headerRow = document.createElement('tr');
-            headerRow.classList.add('bg-gray-200');
-            headerRow.innerHTML = '<th class="p-2 border border-gray-300 text-left text-sm font-semibold text-gray-700">Masa</th>';
+        // Update schedule display
+        function updateScheduleDisplay() {
+            const scheduleDiv = document.getElementById('booking-schedule');
+            const weekDates = getWeekDates(currentViewWeekOffset);
             
-            bookingWeek.dates.forEach(date => {
-                const th = document.createElement('th');
-                th.className = "p-2 border border-gray-300 text-left text-sm font-semibold text-gray-700";
-                th.innerHTML = formatDateHeader(date);
-                headerRow.appendChild(th);
+            // Update week display
+            const currentWeekDiv = document.getElementById('current-week');
+            const firstDate = weekDates[0].date;
+            const lastDate = weekDates[4].date;
+            
+            let weekLabel = '';
+            if (currentViewWeekOffset === 0) {
+                weekLabel = 'Minggu Semasa: ';
+            } else if (currentViewWeekOffset === -1) {
+                weekLabel = 'Minggu Sebelum: ';
+            } else if (currentViewWeekOffset === 1) {
+                weekLabel = 'Minggu Berikutnya: ';
+            } else {
+                weekLabel = 'Minggu: ';
+            }
+            
+            currentWeekDiv.textContent = `${weekLabel}${firstDate.getDate()}/${firstDate.getMonth() + 1} - ${lastDate.getDate()}/${lastDate.getMonth() + 1}/${lastDate.getFullYear()}`;
+            
+            // Update button states
+            updateWeekNavigationButtons();
+            
+            // Time slots for the timetable
+            const timeSlots = [
+                '07:30AM', '08:00AM', '08:30AM', '09:00AM', '09:30AM', '10:00AM',
+                '10:20AM', '10:50AM', '11:20AM', '11:50AM', '12:20PM', '12:50PM',
+                '02:00PM', '02:30PM', '03:00PM', '03:30PM', '04:00PM'
+            ];
+            
+            // Create timetable HTML
+            let timetableHTML = `
+                <table class="w-full bg-white/10 rounded-lg overflow-hidden backdrop-blur-sm">
+                    <thead>
+                        <tr class="bg-white/20">
+                            <th class="p-3 text-left font-bold border-b border-white/20">Masa</th>
+            `;
+            
+            // Add day headers
+            weekDates.forEach(dateInfo => {
+                timetableHTML += `<th class="p-3 text-center font-bold border-b border-white/20 min-w-32">${dateInfo.dayName}<br><span class="text-sm font-normal">${dateInfo.date.getDate()}/${dateInfo.date.getMonth() + 1}</span></th>`;
             });
-            gridHead.appendChild(headerRow);
-
-            // 2. Kemas kini Badan Grid
-            gridBody.innerHTML = ''; // Kosongkan badan lama
             
-            timeSlots.forEach(slot => {
-                const row = document.createElement('tr');
-                row.innerHTML = `<td class="p-2 border border-gray-300 font-medium text-gray-800 bg-gray-50">${slot}</td>`;
-
-                bookingWeek.dates.forEach(date => {
-                    const dateISO = toISODateString(date);
-                    const bookingId = `${dateISO}_${slot}`;
-                    const booking = currentBookings.get(bookingId);
-
-                    const td = document.createElement('td');
-                    td.className = "p-2 border border-gray-300 text-xs align-top relative"; // Tambah 'relative'
-
+            timetableHTML += `
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            // Add time slot rows
+            timeSlots.forEach(timeSlot => {
+                timetableHTML += `
+                    <tr class="border-b border-white/10 hover:bg-white/5">
+                        <td class="p-3 font-semibold border-r border-white/20">${timeSlot}</td>
+                `;
+                
+                // Add cells for each day
+                weekDates.forEach(dateInfo => {
+                    const booking = bookings.find(b => 
+                        b.tarikh === dateInfo.dateString && b.slot_masa === timeSlot
+                    );
+                    
                     if (booking) {
-                        // Slot Ditempah
-                        td.classList.add('bg-red-100', 'text-red-900');
-                        
-                        let deleteButtonHtml = '';
-                        // Req: Hanya tunjuk butang padam jika userId semasa = userId yang menempah
-                        if (booking.bookedByUserId === userId) {
-                            deleteButtonHtml = `
-                                <button 
-                                    class="delete-btn absolute top-1 right-1 h-5 w-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs font-bold hover:bg-red-700"
-                                    data-id="${bookingId}" 
-                                    title="Padam tempahan ini"
-                                >
-                                    &times;
-                                </button>
-                            `;
-                        }
-                        
-                        // (DIKEMASKINI) Hanya papar nama guru untuk elak jadual serabut
-                        td.innerHTML = `
-                            ${deleteButtonHtml}
-                            <div class="font-bold">${booking.teacher}</div>
+                        timetableHTML += `
+                            <td class="p-2 border-r border-white/10">
+                                <div class="time-slot rounded-lg p-2 text-white text-xs relative group">
+                                    <div class="font-semibold truncate">${booking.nama_guru}</div>
+                                    <div class="truncate opacity-90">${booking.nama_kelas}</div>
+                                    <div class="truncate opacity-90">${booking.subjek}</div>
+                                    <button onclick="deleteBooking('${booking.__backendId}')" 
+                                            class="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white w-5 h-5 rounded-full text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
+                                        ×
+                                    </button>
+                                    <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-xs p-1 rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                        ${booking.alatan}
+                                    </div>
+                                </div>
+                            </td>
                         `;
                     } else {
-                        // Slot Kosong
-                        td.classList.add('bg-green-100', 'text-green-700');
-                        td.textContent = 'Kosong';
+                        timetableHTML += `
+                            <td class="p-2 border-r border-white/10">
+                                <div class="h-16 bg-white/5 rounded-lg flex items-center justify-center text-white/30 text-xs">
+                                    Kosong
+                                </div>
+                            </td>
+                        `;
                     }
-                    row.appendChild(td);
-                });
-                gridBody.appendChild(row);
-            });
-        }
-
-        /**
-         * Mula mendengar perubahan data tempahan dari Firestore (Req 6)
-         */
-        function listenForBookings() {
-            const path = `artifacts/${appId}/public/data/labBookings`;
-            const startDateISO = toISODateString(bookingWeek.start);
-            const endDateISO = toISODateString(bookingWeek.end);
-
-            // Kami menggunakan 'public/data' supaya semua guru boleh melihat semua tempahan
-            const q = query(
-                collection(db, path),
-                where("date", ">=", startDateISO),
-                where("date", "<=", endDateISO)
-            );
-
-            // onSnapshot akan dikemas kini secara automatik
-            onSnapshot(q, (snapshot) => {
-                currentBookings.clear(); // Kosongkan peta lama
-                snapshot.forEach((doc) => {
-                    currentBookings.set(doc.id, doc.data());
                 });
                 
-                // (DIKEMASKINI) Panggil kedua-dua fungsi kemas kini
-                updateBookingGrid(); // Lukis semula grid
-                updateBookingList(); // Lukis semula senarai butiran
-                
-                // Sembunyikan pemuat, tunjukkan kandungan
-                loadingSpinner.classList.add('hidden');
-                mainContent.classList.remove('hidden');
-
-            }, (error) => {
-                console.error("Ralat mendengar tempahan: ", error);
-                showMessage("Gagal memuatkan data tempahan. Sila muat semula.", true);
-                loadingSpinner.classList.add('hidden');
-                mainContent.classList.remove('hidden');
+                timetableHTML += `</tr>`;
             });
+            
+            timetableHTML += `
+                    </tbody>
+                </table>
+            `;
+            
+            scheduleDiv.innerHTML = timetableHTML;
         }
 
-        /**
-         * (FUNGSI BARU) Kemas kini senarai butiran tempahan di bawah grid
-         */
-        function updateBookingList() {
-            // Kosongkan senarai lama
-            bookingListContainer.innerHTML = '';
-
-            // Dapatkan semua tempahan dari 'Map'
-            const bookings = Array.from(currentBookings.values());
-
-            // Jika tiada tempahan, papar mesej
-            if (bookings.length === 0) {
-                bookingListContainer.innerHTML = '<p class="text-sm text-gray-500 text-center">Tiada tempahan untuk minggu ini.</p>';
-                return;
-            }
-
-            // Susun tempahan ikut tarikh & masa
-            bookings.sort((a, b) => {
-                const dateComparison = a.date.localeCompare(b.date);
-                if (dateComparison !== 0) return dateComparison;
-                // Susun ikut indeks slot masa
-                const timeA = timeSlots.indexOf(a.timeSlot);
-                const timeB = timeSlots.indexOf(b.timeSlot);
-                return timeA - timeB;
-            });
-
-            // Jana HTML untuk setiap tempahan
-            bookings.forEach(booking => {
-                // Senarai Alatan (Req 6)
-                const equipmentList = booking.equipment && booking.equipment.length > 0 
-                    ? booking.equipment.join(', ') 
-                    : 'Tiada';
-                
-                // Tarikh (Req 4) - format yang lebih mesra
-                const [year, month, day] = booking.date.split('-');
-                const formattedDate = `${day}/${month}/${year}`;
-
-                const cardHtml = `
-                    <div class="bg-gray-50 p-4 rounded-lg shadow-sm border border-gray-200">
-                        <div class="flex flex-col sm:flex-row justify-between sm:items-start">
-                            <!-- Butiran Guru/Kelas -->
-                            <div>
-                                <p class="text-sm font-semibold text-blue-700">${booking.teacher}</p> <!-- (Req 1) -->
-                                <p class="text-sm text-gray-600">${booking.class} - ${booking.subject}</p> <!-- (Req 2 & 3) -->
-                            </div>
-                            <!-- Butiran Masa/Tarikh -->
-                            <div class="text-left sm:text-right flex-shrink-0 sm:ml-4 mt-2 sm:mt-0">
-                                <p class="text-sm font-medium text-gray-900">${formattedDate}</p> <!-- (Req 4) -->
-                                <p class="text-sm text-gray-500">${booking.timeSlot}</p> <!-- (Req 5) -->
-                            </div>
-                        </div>
-                        <!-- Butiran Alatan -->
-                        <div class="mt-3 pt-3 border-t border-gray-200">
-                            <p class="text-xs font-medium text-gray-500">Alatan Digunakan:</p>
-                            <p class="text-sm text-gray-700">${equipmentList}</p> <!-- (Req 6) -->
-                        </div>
-                    </div>
-                `;
-                bookingListContainer.innerHTML += cardHtml;
-            });
+        // Change week view
+        function changeWeek(direction) {
+            currentViewWeekOffset += direction;
+            updateScheduleDisplay();
         }
 
-
-        /**
-         * Kendalikan penyerahan borang (Req 7)
-         */
-        async function handleSubmit(e) {
-            e.preventDefault(); // Hentikan penyerahan borang HTML biasa
-            const formButton = e.target.querySelector('button[type="submit"]');
-            formButton.disabled = true;
-            formButton.textContent = 'Memproses...';
-
-            try {
-                const formData = new FormData(bookingForm);
-                const date = formData.get('date');
-                const timeSlot = formData.get('timeSlot');
-
-                // Req 7: Semak tempahan berganda
-                // Kami semak peta 'currentBookings' setempat dahulu, yang disegerakkan oleh onSnapshot
-                const bookingId = `${date}_${timeSlot}`;
-                if (currentBookings.has(bookingId)) {
-                    showMessage('Slot masa ini telah ditempah. Sila pilih slot lain.', true);
-                    formButton.disabled = false;
-                    formButton.textContent = 'Hantar Tempahan';
-                    return; // Hentikan fungsi di sini
-                }
-
-                // Dapatkan senarai alatan yang ditanda (Req 5)
-                const equipment = [];
-                formData.getAll('equipment').forEach(item => {
-                    equipment.push(item);
-                });
-
-                // Sediakan data untuk dihantar ke Firestore
-                const bookingData = {
-                    teacher: formData.get('teacher'),
-                    class: formData.get('class'),
-                    subject: formData.get('subject'),
-                    date: date,
-                    timeSlot: timeSlot,
-                    equipment: equipment,
-                    bookedByUserId: userId, // Jejaki siapa yang menempah
-                    timestamp: new Date() // Simpan cap masa
-                };
-
-                // Tulis data ke Firestore menggunakan bookingId sebagai ID Dokumen
-                // Ini secara automatik menghalang keadaan 'race condition'
-                const docRef = doc(db, `artifacts/${appId}/public/data/labBookings`, bookingId);
-                await setDoc(docRef, bookingData);
-
-                showMessage('Tempahan berjaya!', false);
-                bookingForm.reset(); // Kosongkan borang selepas berjaya
-                // Tetapkan semula tarikh ke nilai lalai
-                setupDateInput();
-                
-                // onSnapshot akan mengemas kini UI secara automatik
-
-            } catch (error) {
-                console.error("Ralat menghantar tempahan: ", error);
-                showMessage('Gagal menyimpan tempahan. Sila cuba lagi.', true);
-            } finally {
-                formButton.disabled = false;
-                formButton.textContent = 'Hantar Tempahan';
-            }
-        }
-
-        // --- FUNGSI BARU UNTUK PADAM & MUAT TURUN ---
-
-        /**
-         * Tunjukkan modal pengesahan padam
-         * @param {string} bookingId - ID dokumen untuk dipadam
-         */
-        function showDeleteModal(bookingId) {
-            bookingIdToDelete = bookingId;
-            deleteModal.classList.remove('hidden');
-        }
-
-        /**
-         * Sembunyikan modal pengesahan padam
-         */
-        function hideDeleteModal() {
-            bookingIdToDelete = null;
-            deleteModal.classList.add('hidden');
-        }
-
-        /**
-         * (BARU) Tunjukkan modal kata laluan
-         */
-        function showPasswordModal() {
-            passwordInput.value = ''; // Kosongkan percubaan lama
-            passwordErrorMsg.classList.add('hidden'); // Sembunyi ralat lama
-            passwordModal.classList.remove('hidden');
-            passwordInput.focus(); // Fokus pada input
-        }
-
-        /**
-         * (BARU) Sembunyikan modal kata laluan
-         */
-        function hidePasswordModal() {
-            passwordModal.classList.add('hidden');
-        }
-        
-        /**
-         * (BARU) Kendalikan pengesahan kata laluan
-         */
-        function handlePasswordConfirm() {
-            const password = passwordInput.value;
-            // Semak kata laluan
-            if (password === "SEKOLAH-1267") {
-                hidePasswordModal();
-                downloadCSV(); // Panggil fungsi muat turun asal
+        // Update week navigation button states
+        function updateWeekNavigationButtons() {
+            const prevBtn = document.getElementById('prev-week-btn');
+            const nextBtn = document.getElementById('next-week-btn');
+            
+            // You can view any week in the past or future for viewing purposes
+            // No restrictions on viewing, only on booking
+            prevBtn.disabled = false;
+            nextBtn.disabled = false;
+            
+            // Update button appearance based on current view
+            if (currentViewWeekOffset === 0) {
+                prevBtn.className = "bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2";
+                nextBtn.className = "bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2";
             } else {
-                // Tunjukkan ralat dalam modal
-                passwordErrorMsg.textContent = 'Kata laluan salah. Sila cuba lagi.';
-                passwordErrorMsg.classList.remove('hidden');
+                prevBtn.className = "bg-white/30 hover:bg-white/40 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2";
+                nextBtn.className = "bg-white/30 hover:bg-white/40 text-white px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center space-x-2";
             }
         }
 
-        /**
-         * Kendalikan pemadaman tempahan selepas pengesahan
-         */
-        async function handleDeleteBooking() {
-            if (!bookingIdToDelete) return;
-
-            try {
-                const docRef = doc(db, `artifacts/${appId}/public/data/labBookings`, bookingIdToDelete);
-                await deleteDoc(docRef);
-                showMessage('Tempahan berjaya dipadam.', false);
-            } catch (error) {
-                console.error("Ralat memadam tempahan: ", error);
-                showMessage('Gagal memadam tempahan. Sila cuba lagi.', true);
-            } finally {
-                hideDeleteModal();
-                // onSnapshot akan mengemas kini UI secara automatik
+        // Delete booking
+        async function deleteBooking(bookingId) {
+            const booking = bookings.find(b => b.__backendId === bookingId);
+            if (!booking) return;
+            
+            const result = await window.dataSdk.delete(booking);
+            if (result.isOk) {
+                showMessage('Tempahan berjaya dipadam.', 'success');
+            } else {
+                showMessage('Ralat memadamkan tempahan.', 'error');
             }
         }
 
-        /**
-         * Jana dan muat turun data sebagai fail CSV
-         */
-        function downloadCSV() {
-            if (currentBookings.size === 0) {
-                showMessage('Tiada data tempahan untuk dimuat turun.', true);
+        // Show message
+        function showMessage(text, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = text;
+            messageDiv.className = `mt-4 p-3 rounded-lg ${type === 'success' ? 'bg-green-500' : 'bg-red-500'} text-white`;
+            messageDiv.classList.remove('hidden');
+            
+            setTimeout(() => {
+                messageDiv.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Form submission
+        document.getElementById('booking-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (currentRecordCount >= 999) {
+                showMessage('Had maksimum 999 tempahan telah dicapai. Sila padam beberapa tempahan terlebih dahulu.', 'error');
                 return;
             }
-
-            // Dapatkan semua tempahan dari 'Map' dan susun ikut tarikh & masa
-            const bookings = Array.from(currentBookings.values());
-            bookings.sort((a, b) => {
-                const dateComparison = a.date.localeCompare(b.date);
-                if (dateComparison !== 0) return dateComparison;
-                const timeA = timeSlots.indexOf(a.timeSlot);
-                const timeB = timeSlots.indexOf(b.timeSlot);
-                return timeA - timeB;
-            });
-
-            let csvContent = "data:text/csv;charset=utf-8,";
-            // Tambah Tajuk
-            csvContent += "Tarikh,Masa,Nama Guru,Kelas,Subjek,Alatan Digunakan\n";
-
-            // Tambah Baris Data
-            bookings.forEach(booking => {
-                const equipmentStr = `"${booking.equipment ? booking.equipment.join('; ') : ''}"`; // Letak dalam ""
-                const teacherStr = `"${booking.teacher}"`; // Letak dalam ""
-                const classStr = `"${booking.class}"`;
-                
-                const row = [
-                    booking.date,
-                    booking.timeSlot,
-                    teacherStr,
-                    classStr,
-                    booking.subject,
-                    equipmentStr
-                ].join(',');
-                
-                csvContent += row + "\n";
-            });
-
-            // Cipta pautan muat turun dan klik
-            const encodedUri = encodeURI(csvContent);
-            const link = document.createElement("a");
-            link.setAttribute("href", encodedUri);
-            link.setAttribute("download", `tempahan_makmal_${toISODateString(new Date())}.csv`);
-            document.body.appendChild(link); // Perlu untuk Firefox
-            link.click();
-            document.body.removeChild(link);
             
-            showMessage('Muat turun CSV bermula...', false);
-        }
-
-
-        /**
-         * Sediakan pendengar acara untuk borang
-         */
-        function setupFormListener() {
-            bookingForm.addEventListener('submit', handleSubmit);
-        }
-
-        /**
-         * Mulakan aplikasi selepas pengesahan Firebase
-         */
-        function initApp() {
-            // Tentukan julat minggu tempahan yang sah
-            bookingWeek = getWeekRangeToBook();
-
-            // Sediakan borang
-            setupDateInput();
-            setupFormListener();
+            const formData = new FormData(e.target);
+            const tarikh = document.getElementById('selected-date').value;
+            const slotMasa = document.getElementById('slot-masa').value;
             
-            // Sediakan pendengar acara untuk butang baru
-            confirmDeleteBtn.addEventListener('click', handleDeleteBooking);
-            cancelDeleteBtn.addEventListener('click', hideDeleteModal);
+            // Check for double booking
+            const isDoubleBooked = bookings.some(booking => 
+                booking.tarikh === tarikh && booking.slot_masa === slotMasa
+            );
             
-            // (DIKEMASKINI) Tukar pendengar untuk butang muat turun
-            downloadCsvBtn.addEventListener('click', showPasswordModal);
-
-            // (BARU) Pendengar untuk modal kata laluan
-            confirmPasswordBtn.addEventListener('click', handlePasswordConfirm);
-            cancelPasswordBtn.addEventListener('click', hidePasswordModal);
-
-            // (BARU) Benarkan 'Enter' pada input kata laluan
-            passwordInput.addEventListener('keyup', (e) => {
-                if (e.key === 'Enter') {
-                    handlePasswordConfirm();
-                }
+            if (isDoubleBooked) {
+                showMessage('Slot masa ini telah ditempah. Sila pilih slot lain.', 'error');
+                return;
+            }
+            
+            // Get selected equipment
+            const selectedEquipment = [];
+            document.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
+                selectedEquipment.push(checkbox.value);
             });
+            
+            const bookingData = {
+                id: Date.now().toString(),
+                nama_guru: document.getElementById('nama-guru').value,
+                nama_kelas: document.getElementById('nama-kelas').value,
+                subjek: document.getElementById('subjek').value,
+                tarikh: tarikh,
+                slot_masa: slotMasa,
+                alatan: selectedEquipment.join(', '),
+                created_at: new Date(2025, 9, 30).toISOString()
+            };
+            
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Menghantar...';
+            
+            const result = await window.dataSdk.create(bookingData);
+            
+            if (result.isOk) {
+                showMessage('Tempahan berjaya dihantar!', 'success');
+                e.target.reset();
+            } else {
+                showMessage('Ralat menghantar tempahan. Sila cuba lagi.', 'error');
+            }
+            
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Hantar Tempahan';
+        });
 
-            // Guna 'event delegation' untuk butang padam pada grid
-            gridBody.addEventListener('click', (e) => {
-                // Periksa jika butang 'delete-btn' atau ikon dalamnya diklik
-                const deleteButton = e.target.closest('.delete-btn');
-                if (deleteButton) {
-                    const id = deleteButton.dataset.id;
-                    if (id) {
-                        showDeleteModal(id);
-                    }
-                }
-            });
+        // Add event listeners for slot checking
+        document.getElementById('slot-masa').addEventListener('change', checkSlotAvailability);
 
-            // Mula mendengar data tempahan
-            listenForBookings();
-        }
-
-        /**
-         * Sediakan sambungan Firebase
-         */
-        async function setupFirebase() {
-            try {
-                // Sila jangan padam baris ini, ia penting untuk log
-                setLogLevel('Debug');
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                // Dengar perubahan status pengesahan
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        // Pengguna telah disahkan
-                        userId = user.uid;
-                        initApp(); // Mulakan aplikasi utama
-                    } else {
-                        // Pengguna tidak disahkan, cuba sahkan
-                        try {
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                            // onAuthStateChanged akan dipanggil semula selepas ini
-                        } catch (authError) {
-                            console.error("Ralat pengesahan:", authError);
-                            showMessage("Gagal menyambung ke perkhidmatan. Sila muat semula.", true);
-                        }
-                    }
-                });
-
-            } catch (e) {
-                console.error("Ralat memulakan Firebase:", e);
-                showMessage("Ralat konfigurasi kritikal. Aplikasi tidak dapat dimuatkan.", true);
+        // Element SDK configuration
+        async function onConfigChange(config) {
+            const tajukElement = document.getElementById('tajuk-sistem');
+            const sekolahElement = document.getElementById('nama-sekolah');
+            
+            if (tajukElement) {
+                tajukElement.textContent = config.tajuk_sistem || defaultConfig.tajuk_sistem;
+            }
+            if (sekolahElement) {
+                sekolahElement.textContent = config.nama_sekolah || defaultConfig.nama_sekolah;
             }
         }
 
-        // Mulakan proses persediaan apabila DOM sedia
-        document.addEventListener('DOMContentLoaded', setupFirebase);
+        function mapToCapabilities(config) {
+            return {
+                recolorables: [],
+                borderables: [],
+                fontEditable: undefined,
+                fontSizeable: undefined
+            };
+        }
 
+        function mapToEditPanelValues(config) {
+            return new Map([
+                ["tajuk_sistem", config.tajuk_sistem || defaultConfig.tajuk_sistem],
+                ["nama_sekolah", config.nama_sekolah || defaultConfig.nama_sekolah]
+            ]);
+        }
+
+        // Initialize application
+        async function initApp() {
+            // Initialize Element SDK
+            if (window.elementSdk) {
+                await window.elementSdk.init({
+                    defaultConfig,
+                    onConfigChange,
+                    mapToCapabilities,
+                    mapToEditPanelValues
+                });
+            }
+
+            // Initialize Data SDK
+            if (window.dataSdk) {
+                const result = await window.dataSdk.init(dataHandler);
+                if (!result.isOk) {
+                    console.error('Failed to initialize data SDK');
+                }
+            }
+
+            // Initialize calendar
+            renderCalendar();
+        }
+
+        // Start application when page loads
+        document.addEventListener('DOMContentLoaded', initApp);
     </script>
-    <style>
-        /* Gunakan fon Inter yang bersih */
-        body {
-            font-family: 'Inter', sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-        /* Import fon Inter */
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-        /* Sembunyikan anak panah input nombor (walaupun kita guna tarikh, ini amalan baik) */
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
-        input[type=number] {
-            -moz-appearance: textfield;
-        }
-        
-        /* Gaya untuk butang padam ('x') */
-        .delete-btn {
-            transition: all 0.2s ease;
-        }
-        
-    </style>
-</head>
-<body class="bg-gray-100">
-
-    <div class="container mx-auto p-4 md:p-8 max-w-7xl">
-
-        <!-- Logo dan Tajuk -->
-        <div class="flex flex-col items-center mb-6">
-            <img src="https://i.postimg.cc/pXm8mmQ3/unnamed.png" alt="Logo Sekolah" class="h-20 w-20 object-contain mb-4 rounded-full shadow-md">
-            <h1 class="text-3xl font-bold text-gray-800 text-center">
-                Borang Tempahan Makmal Komputer
-            </h1>
-        </div>
-
-        <!-- Kotak Mesej Maklum Balas -->
-        <div id="message-box" class="p-4 mb-4 text-sm rounded-lg hidden" role="alert">
-            <!-- Kandungan mesej dimasukkan oleh JS -->
-        </div>
-
-        <!-- Modal Pengesahan Padam (BARU) -->
-        <div id="delete-modal" class="hidden fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-            <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                <!-- Latar belakang gelap -->
-                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-                <!-- Penjajaran tengah -->
-                <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                <!-- Kandungan Modal -->
-                <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                        <div class="sm:flex sm:items-start">
-                            <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
-                                <!-- Ikon Amaran -->
-                                <svg class="h-6 w-6 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                </svg>
-                            </div>
-                            <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                                <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                                    Padam Tempahan
-                                </h3>
-                                <div class="mt-2">
-                                    <p class="text-sm text-gray-500">
-                                        Anda pasti mahu memadam tempahan ini? Tindakan ini tidak boleh dibatalkan.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                        <button id="confirm-delete-btn" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm">
-                            Padam
-                        </button>
-                        <button id="cancel-delete-btn" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                            Batal
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <!-- Tamat Modal -->
-
-        <!-- (MODAL BARU) Modal Kata Laluan CSV -->
-        <div id="password-modal" class="hidden fixed inset-0 z-50 overflow-y-auto" aria-labelledby="password-modal-title" role="dialog" aria-modal="true">
-            <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                <!-- Latar belakang gelap -->
-                <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
-                <!-- Penjajaran tengah -->
-                <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
-                <!-- Kandungan Modal -->
-                <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-sm sm:w-full">
-                    <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                        <div class="sm:flex sm:items-start">
-                            <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
-                                <!-- Ikon Kunci -->
-                                <svg class="h-6 w-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                                </svg>
-                            </div>
-                            <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                                <h3 class="text-lg leading-6 font-medium text-gray-900" id="password-modal-title">
-                                    Pengesahan Admin
-                                </h3>
-                                <div class="mt-2">
-                                    <p class="text-sm text-gray-500 mb-2">
-                                        Sila masukkan kata laluan admin untuk muat turun CSV.
-                                    </p>
-                                    <input type="password" id="password-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm" placeholder="Kata Laluan">
-                                    <p id="password-error-msg" class="text-xs text-red-600 mt-1 hidden"></p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                        <button id="confirm-password-btn" type="button" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm">
-                            Sahkan
-                        </button>
-                        <button id="cancel-password-btn" type="button" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm">
-                            Batal
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <!-- Tamat Modal Kata Laluan -->
-
-
-        <!-- Pemuat (ditunjukkan semasa data dimuatkan) -->
-        <div id="loading-spinner" class="text-center py-10">
-            <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-600 border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]" role="status">
-                <span class="!absolute !-m-px !h-px !w-px !overflow-hidden !whitespace-nowrap !border-0 !p-0 ![clip:rect(0,0,0,0)]">Memuatkan...</span>
-            </div>
-            <p class="mt-2 text-gray-600">Memuatkan jadual tempahan...</p>
-        </div>
-
-        <!-- Kandungan Utama (borang dan grid) -->
-        <div id="main-content" class="grid grid-cols-1 lg:grid-cols-3 gap-6 hidden">
-
-            <!-- Bahagian Borang -->
-            <div class="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg">
-                <h2 class="text-xl font-semibold mb-4 text-gray-700">Buat Tempahan Baharu</h2>
-                
-                <form id="booking-form" class="space-y-4">
-                    
-                    <!-- 1. Nama Guru -->
-                    <div>
-                        <label for="teacher" class="block text-sm font-medium text-gray-700">Nama Guru</label>
-                        <select id="teacher" name="teacher" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
-                            <option value="">Sila pilih nama</option>
-                            <option value="EN MASRI BIN MAT SOM">EN MASRI BIN MAT SOM</option>
-                            <option value="EN MOHD SHUKRI BIN ABDULLAH">EN MOHD SHUKRI BIN ABDULLAH</option>
-                            <option value="PN MIMI HAFIZAH BINTI ADNAN">PN MIMI HAFIZAH BINTI ADNAN</option>
-                            <option value="EN MOHD ZAMRI BIN JAMALUDIN">EN MOHD ZAMRI BIN JAMALUDIN</option>
-                            <option value="PN WAN MURNI WATI BINTI MAT RANI">PN WAN MURNI WATI BINTI MAT RANI</option>
-                            <option value="EN MOHD SUHAIMI BIN OTHMAN">EN MOHD SUHAIMI BIN OTHMAN</option>
-                            <option value="PN NOR'AZIAH BT MOHD STAR">PN NOR'AZIAH BT MOHD STAR</option>
-                            <option value="PN RABEAH BT JAHaya">PN RABEAH BT JAHAYA</option>
-                            <option value="PN.NOR FADILAH BT SAAT">PN.NOR FADILAH BT SAAT</option>
-                            <option value="PN NOR AZA BT YAHYA">PN NOR AZA BT YAHYA</option>
-                            <option value="PN AZIZAH BT MOKHTAR">PN AZIZAH BT MOKHTAR</option>
-                            <option value="EN MUHAMMAD HILMAN BIN ABD HALIM">EN MUHAMMAD HILMAN BIN ABD HALIM</option>
-                            <option value="PN NURUL ADIBAH BT MOHD SIBI">PN NURUL ADIBAH BT MOHD SIBI</option>
-                            <option value="PN SHUZANNA BINTI SHOIB">PN SHUZANNA BINTI SHOIB</option>
-                            <option value="EN ABD NASIR BIN SHAARANI">EN ABD NASIR BIN SHAARANI</option>
-                            <option value="PN NOR AFIFAH BT MAT SALIM">PN NOR AFIFAH BT MAT SALIM</option>
-                            <option value="PN NIK NORLINI BINTI NIK DIN">PN NIK NORLINI BINTI NIK DIN</option>
-                            <option value="PN JAMILAH BT MOKHTAR">PN JAMILAH BT MOKHTAR</option>
-                            <option value="PN SUHAILY BT MAT NOR">PN SUHAILY BT MAT NOR</option>
-                            <option value="PN NURUL IZZATI BT HASMI">PN NURUL IZZATI BT HASMI</option>
-                        </select>
-                    </div>
-
-                    <!-- 2. Nama Kelas -->
-                    <div>
-                        <label for="class" class="block text-sm font-medium text-gray-700">Nama Kelas</label>
-                        <select id="class" name="class" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
-                            <option value="">Sila pilih kelas</option>
-                            <option value="PRASEKOLAH PINTAR">PRASEKOLAH PINTAR</option>
-                            <option value="TAHUN 1 CERDAS">TAHUN 1 CERDAS</option>
-                            <option value="TAHUN 2 CERDIK">TAHUN 2 CERDIK</option>
-                            <option value="TAHUN 3 BIJAK">TAHUN 3 BIJAK</option>
-                            <option value="TAHUN 4 PINTAR">TAHUN 4 PINTAR</option>
-                            <option value="TAHUN 5 MUMTAZ">TAHUN 5 MUMTAZ</option>
-                            <option value="TAHUN 6 GENIUS">TAHUN 6 GENIUS</option>
-                            <option value="LAIN-LAIN">LAIN-LAIN</option>
-                        </select>
-                    </div>
-
-                    <!-- 3. Nama Subjek -->
-                    <div>
-                        <label for="subject" class="block text-sm font-medium text-gray-700">Subjek</label>
-                        <select id="subject" name="subject" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
-                            <option value="">Sila pilih subjek</option>
-                            <option value="BM">BM</option>
-                            <option value="BI">BI</option>
-                            <option value="MATE">MATE</option>
-                            <option value="SAINS">SAINS</option>
-                            <option value="BA">BA</option>
-                            <option value="PJ">PJ</option>
-                            <option value="PK">PK</option>
-                            <option value="PS">PS</option>
-                            <option value="MZ">MZ</option>
-                            <option value="PI">PI</option>
-                            <option value="ULM">ULM</option>
-                            <option value="TSMK">TSMK</option>
-                            <option value="SJ">SJ</option>
-                            <option value="RBT">RBT</option>
-                            <option value="LAIN-LAIN">LAIN-LAIN</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Tarikh -->
-                    <div>
-                        <label for="booking-date" class="block text-sm font-medium text-gray-700">Tarikh Tempahan</label>
-                        <input type="date" id="booking-date" name="date" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
-                        <p class="mt-1 text-xs text-gray-500">Tempahan hanya untuk minggu semasa (Isnin-Jumaat).</p>
-                    </div>
-
-                    <!-- 4. Slot Masa -->
-                    <div>
-                        <label for="timeSlot" class="block text-sm font-medium text-gray-700">Slot Masa</label>
-                        <select id="timeSlot" name="timeSlot" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
-                            <option value="">Sila pilih masa</option>
-                            <option value="07:30AM">07:30AM</option>
-                            <option value="08:00AM">08:00AM</option>
-                            <option value="08:30AM">08:30AM</option>
-                            <option value="09:00AM">09:00AM</option>
-                            <option value="09:30AM">09:30AM</option>
-                            <option value="10:00AM">10:00AM</option>
-                            <option value="10:20AM">10:20AM</option>
-                            <option value="10:50AM">10:50AM</option>
-                            <option value="11:20AM">11:20AM</option>
-                            <option value="11:50AM">11:50AM</option>
-                            <option value="12:20PM">12:20PM</option>
-                            <option value="12:50PM">12:50PM</option>
-                            <option value="02:00PM">02:00PM</option>
-                            <option value="02:30PM">02:30PM</option>
-                            <option value="03:00PM">03:00PM</option>
-                            <option value="03:30PM">03:30PM</option>
-                            <option value="04:00PM">04:00PM</option>
-                        </select>
-                    </div>
-
-                    <!-- 5. Alatan -->
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">Alatan Digunakan</label>
-                        <div class="mt-2 space-y-2">
-                            <div class="flex items-center">
-                                <input id="eq-komputer" name="equipment" type="checkbox" value="Komputer" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-komputer" class="ml-2 block text-sm text-gray-900">Komputer</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-laptop" name="equipment" type="checkbox" value="Laptop" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-laptop" class="ml-2 block text-sm text-gray-900">Laptop</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-headphones" name="equipment" type="checkbox" value="Headphones" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-headphones" class="ml-2 block text-sm text-gray-900">Headphones</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-mouse" name="equipment" type="checkbox" value="Mouse murid" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-mouse" class="ml-2 block text-sm text-gray-900">Mouse murid</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-lcd" name="equipment" type="checkbox" value="LCD dan laptop guru" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-lcd" class="ml-2 block text-sm text-gray-900">LCD dan laptop guru</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-smartboard" name="equipment" type="checkbox" value="Smartboard (akan datang)" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-smartboard" class="ml-2 block text-sm text-gray-900">Smartboard (akan datang)</label>
-
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-mic" name="equipment" type="checkbox" value="Microphones" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-mic" class="ml-2 block text-sm text-gray-900">Microphones</label>
-                            </div>
-                            <div class="flex items-center">
-                                <input id="eq-speaker" name="equipment" type="checkbox" value="Speaker" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                <label for="eq-speaker" class="ml-2 block text-sm text-gray-900">Speaker</label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Butang Hantar -->
-                    <div>
-                        <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50">
-                            Hantar Tempahan
-                        </button>
-                    </div>
-                </form>
-            </div>
-
-                    <!-- Bahagian Paparan Grid Tempahan -->
-            <div class="lg:col-span-2 bg-white p-6 rounded-lg shadow-lg">
-                <div class="flex justify-between items-center mb-4">
-                    <h2 class="text-xl font-semibold text-gray-700">
-                        Senarai Tempahan Minggu Semasa
-                    </h2>
-                    <!-- Butang Muat Turun CSV (BARU) -->
-                    <button id="download-csv-btn" type="button" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                        <!-- Ikon Muat Turun -->
-                        <svg class="-ml-0.5 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                        Muat Turun CSV
-                    </button>
-                </div>
-                <div class="overflow-x-auto border border-gray-200 rounded-lg">
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead id="grid-head">
-                            <!-- Tajuk grid dijana oleh JS -->
-                        </thead>
-                        <tbody id="grid-body" class="bg-white divide-y divide-gray-200">
-                            <!-- Baris grid dijana oleh JS -->
-                        </tbody>
-                    </table>
-                </div>
-                <div class="flex justify-start space-x-4 mt-4">
-                    <div class="flex items-center">
-                        <span class="h-4 w-4 bg-green-100 border border-green-300 rounded-sm mr-2"></span>
-                        <span class="text-sm text-gray-600">Kosong</span>
-                    </div>
-                    <div class="flex items-center">
-                        <span class="h-4 w-4 bg-red-100 border border-red-300 rounded-sm mr-2"></span>
-                        <span class="text-sm text-gray-600">Telah Ditempah</span>
-                    </div>
-                </div>
-
-                <!-- (BAHAGIAN BARU) Senarai Pengguna -->
-                <h3 class="text-lg font-semibold text-gray-700 mt-8 mb-4">
-                    Senarai Tempahan Minggu Ini (Butiran)
-                </h3>
-                <div id="booking-list" class="space-y-4 max-h-96 overflow-y-auto pr-2">
-                    <!-- Kandungan senarai dijana oleh JS -->
-                </div>
-
-            </div>
-
-        </div> <!-- tutup main-content -->
-
-    </div> <!-- tutup container -->
-
-</body>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'99680a16f379fc5d',t:'MTc2MTc5NzE4MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
-
